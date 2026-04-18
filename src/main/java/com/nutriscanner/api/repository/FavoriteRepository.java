@@ -12,4 +12,5 @@ public interface FavoriteRepository extends JpaRepository<Favorite, UUID> {
     List<Favorite> findByUserIdOrderBySavedAtDesc(UUID userId);
     Optional<Favorite> findByUserIdAndProductBarcode(UUID userId, String barcode);
     boolean existsByUserIdAndProductBarcode(UUID userId, String barcode);
+    void deleteByUserId(UUID userId);
 }

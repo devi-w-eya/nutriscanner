@@ -9,4 +9,5 @@ import java.util.UUID;
 @Repository
 public interface ScanHistoryRepository extends JpaRepository<ScanHistory, UUID> {
     List<ScanHistory> findByUserIdOrderByScannedAtDesc(UUID userId);
+    void deleteByUserId(UUID userId);
 }

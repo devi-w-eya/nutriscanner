@@ -7,6 +7,8 @@ import com.nutriscanner.api.service.AuthService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import java.util.UUID;
+import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/v1/auth")
@@ -24,5 +26,11 @@ public class AuthController {
     @PostMapping("/login")
     public ResponseEntity<AuthResponse> login(@RequestBody LoginRequest request) {
         return ResponseEntity.ok(authService.login(request));
+    }
+    @DeleteMapping("/account")
+    public ResponseEntity<Void> deleteAccount(
+            @RequestHeader("X-User-Id") String userId) {
+        authService.deleteAccount(UUID.fromString(userId));
+        return ResponseEntity.ok().build();
     }
 }

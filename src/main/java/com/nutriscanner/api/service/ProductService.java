@@ -13,12 +13,8 @@ import com.nutriscanner.api.repository.ProductRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Optional;
-import java.util.UUID;
-import java.util.Set;
-import java.util.HashSet;
+
+import java.util.*;
 
 @Service
 @RequiredArgsConstructor
@@ -33,31 +29,40 @@ public class ProductService {
 
     public ScoreDTO getProductByBarcode(String barcode) {
 
-        // Step 1 — validate barcode format
         if (!barcode.matches("\\d{8,14}")) {
             throw new RuntimeException("INVALID_BARCODE");
         }
 
-        // Step 2 — cache hit
         Optional<Product> cached = productRepository.findByBarcode(barcode);
         if (cached.isPresent()) {
             Product cachedProduct = cached.get();
+            // If cached product has insufficient data → suggest label scan
+            if ("UNKNOWN".equals(cachedProduct.getScoreColor()) ||
+                    "INSUFFICIENT".equals(cachedProduct.getDataCompleteness())) {
+                throw new RuntimeException("PRODUCT_INSUFFICIENT_DATA");
+            }
             cachedProduct.setScanCount(cachedProduct.getScanCount() + 1);
             productRepository.save(cachedProduct);
             return buildScoreDTO(cachedProduct);
         }
 
-        // Step 3 — call OFF
         OpenFoodFactsService.OFFProduct offProduct = offService.fetchByBarcode(barcode);
         if (offProduct == null) {
             throw new RuntimeException("PRODUCT_NOT_FOUND");
         }
 
-        // Step 3b — check if enough data to score
         boolean hasNovaGroup = offProduct.novaGroup != null;
         boolean hasAdditives = !offProduct.additivesCodes.isEmpty();
 
         if (!hasNovaGroup && !hasAdditives) {
+
+            boolean hasIngredients = offProduct.ingredientsText != null
+                    && !offProduct.ingredientsText.isBlank();
+
+            if (!hasIngredients) {
+                throw new RuntimeException("PRODUCT_INSUFFICIENT_DATA");
+            }
+
             Product product = Product.builder()
                     .barcode(barcode)
                     .name(offProduct.name)
@@ -71,13 +76,13 @@ public class ProductService {
                     .scoreLabel("Données insuffisantes")
                     .dataCompleteness("INSUFFICIENT")
                     .build();
+
             Product saved = productRepository.save(product);
             saved.setScanCount(1);
             productRepository.save(saved);
             return buildScoreDTO(saved);
         }
 
-        // Step 4 — build product
         Product product = Product.builder()
                 .barcode(barcode)
                 .name(offProduct.name)
@@ -88,7 +93,6 @@ public class ProductService {
                 .source("OFF")
                 .build();
 
-        // Step 5 — map category
         if (offProduct.categoryTag != null) {
             String tag = offProduct.categoryTag.toLowerCase();
             String categoryName = null;
@@ -142,9 +146,8 @@ public class ProductService {
             }
         }
 
-        // Step 6 — look up additives from additives_tags
         List<Additive> foundAdditives = new ArrayList<>();
-        Set<String> addedCodes = new java.util.HashSet<>();
+        Set<String> addedCodes = new HashSet<>();
 
         for (String code : offProduct.additivesCodes) {
             additiveRepository.findByCode(code).ifPresent(a -> {
@@ -154,7 +157,6 @@ public class ProductService {
             });
         }
 
-// Step 6b — also parse ingredients_text for additives listed by name
         List<Additive> fromText = parseIngredientsText(offProduct.ingredientsText);
         for (Additive a : fromText) {
             if (addedCodes.add(a.getCode())) {
@@ -162,35 +164,31 @@ public class ProductService {
             }
         }
 
-// Step 6c — unknown E-numbers get MEDIUM penalty
         for (String code : offProduct.additivesCodes) {
             if (!addedCodes.contains(code.toUpperCase())) {
                 Additive unknown = Additive.builder()
                         .code(code)
                         .nameFr("Additif non répertorié (" + code + ")")
                         .riskLevel("MEDIUM")
-                        .description("Additif non présent dans notre base de données. Classé modérément préoccupant par précaution.")
+                        .description("Additif non présent dans notre base de données.")
                         .aiIdentified(false)
                         .verified(false)
                         .build();
+                unknown = additiveRepository.save(unknown);
                 foundAdditives.add(unknown);
                 addedCodes.add(code.toUpperCase());
             }
         }
 
-        // Step 7 — calculate score
         int score = scoringService.calculateScore(foundAdditives, offProduct.novaGroup);
         product.setFinalScore(score);
-        product.setScoreColor(scoringService.getColor(score));
+        product.setScoreColor(scoringService.getColor(score, foundAdditives));
         product.setScoreLabel(scoringService.getLabel(score));
 
-        // Step 8 — set data completeness
         product.setDataCompleteness(offProduct.additivesCodes.isEmpty() ? "PARTIAL" : "FULL");
 
-        // Step 9 — save product
         Product saved = productRepository.save(product);
 
-        // Step 10 — save product_additives
         for (Additive additive : foundAdditives) {
             ProductAdditive link = ProductAdditive.builder()
                     .product(saved)
@@ -200,7 +198,6 @@ public class ProductService {
             productAdditiveRepository.save(link);
         }
 
-        // Step 11 — increment scan count
         saved.setScanCount(1);
         productRepository.save(saved);
 
@@ -279,11 +276,101 @@ public class ProductService {
         productRepository.findByBarcode(barcode).ifPresent(product ->
                 historyService.saveScan(userId, product));
     }
+
+    public ScoreDTO scanLabel(String barcode, String base64Image,
+                              GeminiVisionService geminiVisionService) {
+
+        if (!barcode.matches("\\d{8,14}")) {
+            throw new RuntimeException("INVALID_BARCODE");
+        }
+
+        Optional<Product> cached = productRepository.findByBarcode(barcode);
+        if (cached.isPresent() &&
+                !"INSUFFICIENT".equals(cached.get().getDataCompleteness()) &&
+                !"PARTIAL".equals(cached.get().getDataCompleteness())) {
+            return buildScoreDTO(cached.get());
+        }
+
+        String extractedText = geminiVisionService.extractIngredients(base64Image);
+        if (extractedText == null || extractedText.isBlank()) {
+            throw new RuntimeException("AI_UNAVAILABLE");
+        }
+
+        List<Additive> foundAdditives = parseIngredientsText(extractedText);
+
+        java.util.regex.Pattern pattern = java.util.regex.Pattern
+                .compile("[Ee]\\d{3,4}[a-zA-Z]?");
+        java.util.regex.Matcher matcher = pattern.matcher(extractedText);
+        Set<String> knownCodes = new HashSet<>();
+        foundAdditives.forEach(a -> knownCodes.add(a.getCode()));
+
+        while (matcher.find()) {
+            String code = matcher.group().toUpperCase();
+            if (!knownCodes.contains(code)) {
+                Additive unknown = Additive.builder()
+                        .code(code)
+                        .nameFr("Additif non répertorié (" + code + ")")
+                        .riskLevel("MEDIUM")
+                        .description("Additif non présent dans notre base de données.")
+                        .aiIdentified(true)
+                        .verified(false)
+                        .build();
+                unknown = additiveRepository.save(unknown);
+                foundAdditives.add(unknown);
+                knownCodes.add(code);
+            }
+        }
+
+        Integer novaGroup = null;
+        String productName = barcode;
+        String brand = null;
+        String imageUrl = null;
+
+        OpenFoodFactsService.OFFProduct offProduct = offService.fetchByBarcode(barcode);
+        if (offProduct != null) {
+            novaGroup = offProduct.novaGroup;
+            productName = offProduct.name != null ? offProduct.name : barcode;
+            brand = offProduct.brand;
+            imageUrl = offProduct.imageUrl;
+        }
+
+        int score = scoringService.calculateScore(foundAdditives, novaGroup);
+
+        Product product = Product.builder()
+                .barcode(barcode)
+                .name(productName)
+                .brand(brand)
+                .imageUrl(imageUrl)
+                .ingredientsText(extractedText)
+                .novaGroup(novaGroup)
+                .finalScore(score)
+                .scoreColor(scoringService.getColor(score, foundAdditives))
+                .scoreLabel(scoringService.getLabel(score))
+                .dataCompleteness("FULL")
+                .source("GEMINI_VISION")
+                .build();
+
+        Product saved = productRepository.save(product);
+
+        for (Additive additive : foundAdditives) {
+            ProductAdditive link = ProductAdditive.builder()
+                    .product(saved)
+                    .additive(additive)
+                    .deductionApplied(scoringService.getDeduction(additive.getRiskLevel()))
+                    .build();
+            productAdditiveRepository.save(link);
+        }
+
+        saved.setScanCount(1);
+        productRepository.save(saved);
+
+        return buildScoreDTO(saved);
+    }
     private List<Additive> parseIngredientsText(String ingredientsText) {
         List<Additive> found = new ArrayList<>();
         if (ingredientsText == null || ingredientsText.isBlank()) return found;
 
-        Set<String> addedCodes = new java.util.HashSet<>();
+        Set<String> addedCodes = new HashSet<>();
 
         // Step 1 — find E-numbers directly using regex
         java.util.regex.Pattern pattern = java.util.regex.Pattern
@@ -317,103 +404,5 @@ public class ProductService {
         }
 
         return found;
-    }
-    public ScoreDTO scanLabel(String barcode, String base64Image,
-                              GeminiVisionService geminiVisionService) {
-
-        // Step 1 — validate barcode
-        if (!barcode.matches("\\d{8,14}")) {
-            throw new RuntimeException("INVALID_BARCODE");
-        }
-
-        // Step 2 — check cache first
-        Optional<Product> cached = productRepository.findByBarcode(barcode);
-        if (cached.isPresent() &&
-                !"INSUFFICIENT".equals(cached.get().getDataCompleteness()) &&
-                !"PARTIAL".equals(cached.get().getDataCompleteness())) {
-            return buildScoreDTO(cached.get());
-        }
-
-        // Step 3 — call Gemini Vision
-        String extractedText = geminiVisionService.extractIngredients(base64Image);
-        if (extractedText == null || extractedText.isBlank()) {
-            throw new RuntimeException("AI_UNAVAILABLE");
-        }
-
-        System.out.println("Gemini extracted: " + extractedText);
-
-        // Step 4 — parse extracted ingredients
-        List<Additive> foundAdditives = parseIngredientsText(extractedText);
-
-        // Step 5 — unknown E-numbers from extracted text
-        java.util.regex.Pattern pattern = java.util.regex.Pattern
-                .compile("[Ee]\\d{3,4}[a-zA-Z]?");
-        java.util.regex.Matcher matcher = pattern.matcher(extractedText);
-        Set<String> knownCodes = new HashSet<>();
-        foundAdditives.forEach(a -> knownCodes.add(a.getCode()));
-
-        while (matcher.find()) {
-            String code = matcher.group().toUpperCase();
-            if (!knownCodes.contains(code)) {
-                Additive unknown = Additive.builder()
-                        .code(code)
-                        .nameFr("Additif non répertorié (" + code + ")")
-                        .riskLevel("MEDIUM")
-                        .description("Additif non présent dans notre base de données.")
-                        .aiIdentified(true)
-                        .verified(false)
-                        .build();
-                foundAdditives.add(unknown);
-                knownCodes.add(code);
-            }
-        }
-
-        // Step 6 — get NOVA from OFF if available
-        Integer novaGroup = null;
-        String productName = barcode;
-        String brand = null;
-        String imageUrl = null;
-
-        OpenFoodFactsService.OFFProduct offProduct = offService.fetchByBarcode(barcode);
-        if (offProduct != null) {
-            novaGroup = offProduct.novaGroup;
-            productName = offProduct.name != null ? offProduct.name : barcode;
-            brand = offProduct.brand;
-            imageUrl = offProduct.imageUrl;
-        }
-
-        // Step 7 — calculate score
-        int score = scoringService.calculateScore(foundAdditives, novaGroup);
-
-        // Step 8 — build and save product
-        Product product = Product.builder()
-                .barcode(barcode)
-                .name(productName)
-                .brand(brand)
-                .imageUrl(imageUrl)
-                .ingredientsText(extractedText)
-                .novaGroup(novaGroup)
-                .finalScore(score)
-                .scoreColor(scoringService.getColor(score))
-                .scoreLabel(scoringService.getLabel(score))
-                .dataCompleteness("FULL")
-                .source("GEMINI_VISION")
-                .build();
-
-        Product saved = productRepository.save(product);
-
-        for (Additive additive : foundAdditives) {
-            ProductAdditive link = ProductAdditive.builder()
-                    .product(saved)
-                    .additive(additive)
-                    .deductionApplied(scoringService.getDeduction(additive.getRiskLevel()))
-                    .build();
-            productAdditiveRepository.save(link);
-        }
-
-        saved.setScanCount(1);
-        productRepository.save(saved);
-
-        return buildScoreDTO(saved);
     }
 }

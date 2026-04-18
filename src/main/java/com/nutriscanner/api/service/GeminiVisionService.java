@@ -41,12 +41,18 @@ public class GeminiVisionService {
                                             ),
                                             Map.of(
                                                     "type", "text",
-                                                    "text", "Read this food product label carefully. " +
-                                                            "Extract ONLY the ingredients list. " +
-                                                            "Return each ingredient on a new line. " +
-                                                            "Include E-numbers exactly as written (e.g. E322, E471). " +
-                                                            "Include ingredient names exactly as written. " +
-                                                            "Return NOTHING else — no explanation, no preamble, just the ingredients list."
+                                                    "text", "You are analyzing a food product label. The label may be in Arabic, French, English or a mix.\n" +
+                                                            "Extract ONLY the ingredients/additives list from this label.\n" +
+                                                            "For each ingredient found:\n" +
+                                                            "- If it is an E-number (like E471, E322, etc.) write it exactly as shown\n" +
+                                                            "- If it is an Arabic additive name, translate it to its E-number if you know it\n" +
+                                                            "- If it is a French or English additive name, keep it as is\n" +
+                                                            "- List all ingredients separated by commas\n" +
+                                                            "Common Arabic additive translations:\n" +
+                                                            "مونوغليسيريد = E471, ليسيثين = E322, حمض الستريك = E330, بنزوات الصوديوم = E211\n" +
+                                                            "نترات الصوديوم = E251, نتريت الصوديوم = E250, كبريتات الصوديوم = E221\n" +
+                                                            "كاراميل = E150, تارتارين = E102, صفراء الغروب = E110\n" +
+                                                            "Return ONLY the ingredients list, nothing else."
                                             )
                                     )
                             )

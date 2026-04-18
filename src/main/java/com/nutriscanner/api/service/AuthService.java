@@ -4,10 +4,13 @@ import com.nutriscanner.api.dto.request.LoginRequest;
 import com.nutriscanner.api.dto.request.RegisterRequest;
 import com.nutriscanner.api.dto.response.AuthResponse;
 import com.nutriscanner.api.model.User;
+import com.nutriscanner.api.repository.FavoriteRepository;
+import com.nutriscanner.api.repository.ScanHistoryRepository;
 import com.nutriscanner.api.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
+import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
@@ -16,6 +19,8 @@ public class AuthService {
     private final UserRepository userRepository;
     private final JwtService jwtService;
     private final BCryptPasswordEncoder passwordEncoder;
+    private final ScanHistoryRepository scanHistoryRepository;
+    private final FavoriteRepository favoriteRepository;
 
     public AuthResponse register(RegisterRequest request) {
         if (userRepository.existsByEmail(request.getEmail())) {
@@ -66,5 +71,11 @@ public class AuthService {
                 user.getEmail(),
                 user.getFullName()
         );
+    }
+
+    public void deleteAccount(UUID userId) {
+        scanHistoryRepository.deleteByUserId(userId);
+        favoriteRepository.deleteByUserId(userId);
+        userRepository.deleteById(userId);
     }
 }
