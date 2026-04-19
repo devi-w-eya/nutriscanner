@@ -9,4 +9,5 @@ import java.util.UUID;
 @Repository
 public interface ProductAdditiveRepository extends JpaRepository<ProductAdditive, UUID> {
     List<ProductAdditive> findByProductId(UUID productId);
+    void deleteByProductId(UUID productId);
 }

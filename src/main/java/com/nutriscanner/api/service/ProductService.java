@@ -251,7 +251,7 @@ public class ProductService {
 
         int novaBase = product.getNovaGroup() != null
                 ? scoringService.getNovaBase(product.getNovaGroup())
-                : 0;
+                :0;
 
         return ScoreDTO.builder()
                 .barcode(product.getBarcode())
@@ -276,6 +276,7 @@ public class ProductService {
         productRepository.findByBarcode(barcode).ifPresent(product ->
                 historyService.saveScan(userId, product));
     }
+
 
     public ScoreDTO scanLabel(String barcode, String base64Image,
                               GeminiVisionService geminiVisionService) {
@@ -334,6 +335,12 @@ public class ProductService {
             imageUrl = offProduct.imageUrl;
         }
 
+        // If no additives found at all — insufficient data
+        if (foundAdditives.isEmpty()) {
+            throw new RuntimeException("AI_UNAVAILABLE");
+        }
+
+// Step 7 — calculate score
         int score = scoringService.calculateScore(foundAdditives, novaGroup);
 
         Product product = Product.builder()
@@ -349,6 +356,12 @@ public class ProductService {
                 .dataCompleteness("FULL")
                 .source("GEMINI_VISION")
                 .build();
+
+        // Delete existing cached product if it exists to avoid duplicate key
+        productRepository.findByBarcode(barcode).ifPresent(existing -> {
+            productAdditiveRepository.deleteByProductId(existing.getId());
+            productRepository.delete(existing);
+        });
 
         Product saved = productRepository.save(product);
 
@@ -366,6 +379,7 @@ public class ProductService {
 
         return buildScoreDTO(saved);
     }
+
     private List<Additive> parseIngredientsText(String ingredientsText) {
         List<Additive> found = new ArrayList<>();
         if (ingredientsText == null || ingredientsText.isBlank()) return found;
@@ -386,16 +400,23 @@ public class ProductService {
             }
         }
 
-        // Step 2 — find additives by common name
+        // Step 2 — find additives by common name (French and Arabic)
         List<Additive> allAdditives = additiveRepository.findAll();
         String lowerText = ingredientsText.toLowerCase();
+        // Strip Arabic definite article for better matching
+        String strippedText = lowerText.replace("ال", " ").replace("  ", " ");
+
         for (Additive additive : allAdditives) {
             if (addedCodes.contains(additive.getCode())) continue;
             if (additive.getCommonNames() == null) continue;
+
             String[] names = additive.getCommonNames().split(",");
             for (String name : names) {
                 String trimmed = name.trim().toLowerCase();
-                if (trimmed.length() > 3 && lowerText.contains(trimmed)) {
+                String strippedName = trimmed.replace("ال", "");
+
+                if (trimmed.length() > 3 &&
+                        (lowerText.contains(trimmed) || strippedText.contains(strippedName))) {
                     found.add(additive);
                     addedCodes.add(additive.getCode());
                     break;

@@ -41,17 +41,16 @@ public class GeminiVisionService {
                                             ),
                                             Map.of(
                                                     "type", "text",
-                                                    "text", "You are analyzing a food product label. The label may be in Arabic, French, English or a mix.\n" +
-                                                            "Extract ONLY the ingredients/additives list from this label.\n" +
-                                                            "For each ingredient found:\n" +
-                                                            "- If it is an E-number (like E471, E322, etc.) write it exactly as shown\n" +
-                                                            "- If it is an Arabic additive name, translate it to its E-number if you know it\n" +
-                                                            "- If it is a French or English additive name, keep it as is\n" +
-                                                            "- List all ingredients separated by commas\n" +
-                                                            "Common Arabic additive translations:\n" +
-                                                            "مونوغليسيريد = E471, ليسيثين = E322, حمض الستريك = E330, بنزوات الصوديوم = E211\n" +
-                                                            "نترات الصوديوم = E251, نتريت الصوديوم = E250, كبريتات الصوديوم = E221\n" +
-                                                            "كاراميل = E150, تارتارين = E102, صفراء الغروب = E110\n" +
+                                                    "text", "You are reading a food product label. The label may be in Arabic, French, English or a mix.\n\n" +
+                                                            "Your task: Extract the COMPLETE ingredients list exactly as written on the label.\n" +
+                                                            "- Copy text exactly as you see it — do NOT translate or interpret\n" +
+                                                            "- Include E-numbers exactly as written (E471, E322, etc.)\n" +
+                                                            "- Include Arabic ingredient names exactly as written\n" +
+                                                            "- Include French/English ingredient names exactly as written\n" +
+                                                            "- Separate each ingredient with a comma\n" +
+                                                            "- Do NOT add anything not visible on the label\n" +
+                                                            "- Do NOT guess or infer ingredients\n\n" +
+                                                            "If you cannot read the label clearly, return: NONE\n\n" +
                                                             "Return ONLY the ingredients list, nothing else."
                                             )
                                     )
